@@ -1,5 +1,5 @@
-Project Name : Signscribe
-Basic Details
+Project Name : Signscribe 
+
 Team Name: Codeclashers
 Team Members
 Member 1: Lamiya Yasmin A S , Govt. Model Engineering College

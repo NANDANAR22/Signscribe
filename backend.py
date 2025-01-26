@@ -1,62 +1,108 @@
+from flask import Flask, request, jsonify
+import os
 import cv2
-import mediapipe as mp
 import numpy as np
+from tensorflow.keras.models import Sequential, load_model
+from tensorflow.keras.layers import Conv2D, MaxPooling2D, Flatten, Dense
+from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+from sklearn.model_selection import train_test_split
+from tensorflow.keras.utils import to_categorical
+import json
 
-# Initialize Mediapipe for Hand Detection
-mp_hands = mp.solutions.hands
-mp_drawing = mp.solutions.drawing_utils
-hands = mp_hands.Hands()
+app = Flask(__name__)
 
-# Function to detect a basic gesture (A, B, or C)
-def detect_gesture(landmarks):
-    # Gesture "A" (e.g., thumb closed, other fingers extended)
-    if landmarks[4][1] < landmarks[3][1] and landmarks[8][1] < landmarks[7][1] and landmarks[12][1] < landmarks[11][1]:
-        return "A"
+# Path for dataset and model
+DATASET_PATH = 'C:/Users/Administrator/Desktop/Signscribe/Signscribe/asl_alphabet'
+MODEL_PATH = 'sign_language_model.h5'
 
-    # Gesture "B" (e.g., all fingers extended, but thumb bent inward)
-    elif landmarks[4][1] > landmarks[3][1] and landmarks[8][1] < landmarks[7][1] and landmarks[12][1] < landmarks[11][1]:
-        return "B"
+# Load or create the model
+def create_model():
+    model = Sequential([
+        Conv2D(32, (3, 3), activation='relu', input_shape=(64, 64, 1)),
+        MaxPooling2D(pool_size=(2, 2)),
+        Flatten(),
+        Dense(128, activation='relu'),
+        Dense(26, activation='softmax')  # 26 letters (A-Z)
+    ])
+    model.compile(optimizer=Adam(), loss='categorical_crossentropy', metrics=['accuracy'])
+    return model
 
-    # Gesture "C" (e.g., thumb and fingers forming a "C")
-    elif landmarks[4][1] < landmarks[3][1] and landmarks[8][1] > landmarks[7][1]:
-        return "C"
+# Load dataset and prepare it
+def load_and_preprocess_data(dataset_path):
+    # Read all images and labels
+    images = []
+    labels = []
+    label_dict = {}  # mapping of class id to letter
+    
+    for folder_name in os.listdir(dataset_path):
+        folder_path = os.path.join(dataset_path, folder_name)
+        if os.path.isdir(folder_path):
+            label_dict[len(label_dict)] = folder_name
+            for image_name in os.listdir(folder_path):
+                image_path = os.path.join(folder_path, image_name)
+                image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+                image = cv2.resize(image, (64, 64))  # Resize image
+                images.append(image)
+                labels.append(len(label_dict) - 1)  # The folder index is the label
 
-    return "Unknown"
+    # Convert to numpy arrays
+    images = np.array(images).reshape(-1, 64, 64, 1) / 255.0  # Normalize and reshape
+    labels = np.array(labels)
 
-# Start webcam feed
-cap = cv2.VideoCapture(0)
+    # One-hot encode labels
+    labels = to_categorical(labels, num_classes=len(label_dict))
 
-while True:
-    ret, frame = cap.read()
-    if not ret:
-        break
+    return images, labels, label_dict
 
-    # Convert the frame to RGB for Mediapipe
-    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    results = hands.process(frame_rgb)
+# Save model to a file
+def save_model(model, model_path):
+    model.save(model_path)
 
-    if results.multi_hand_landmarks:
-        for hand_landmarks in results.multi_hand_landmarks:
-            # Extract hand landmarks and convert them to a list
-            landmarks = []
-            for landmark in hand_landmarks.landmark:
-                landmarks.append([landmark.x, landmark.y, landmark.z])
-            
-            # Use a rule-based method to classify the gesture
-            gesture = detect_gesture(landmarks)
+# Train the model
+@app.route('/train', methods=['POST'])
+def train():
+    images, labels, label_dict = load_and_preprocess_data(DATASET_PATH)
+    X_train, X_test, y_train, y_test = train_test_split(images, labels, test_size=0.2, random_state=42)
 
-            # Draw hand landmarks
-            mp_drawing.draw_landmarks(frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
-            
-            # Display the recognized gesture
-            cv2.putText(frame, f'Gesture: {gesture}', (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+    model = create_model()
+    model.fit(X_train, y_train, epochs=10, batch_size=32, validation_data=(X_test, y_test))
 
-    # Show the result in the OpenCV window
-    cv2.imshow("Sign Language Detection", frame)
+    # Save the trained model
+    save_model(model, MODEL_PATH)
+    
+    return jsonify({"message": "Model trained and saved successfully!"}), 200
 
-    # Break the loop if 'q' is pressed
-    if cv2.waitKey(1) & 0xFF == ord('q'):
-        break
+# Predict using the trained model
+@app.route('/predict', methods=['POST'])
+def predict():
+    if not os.path.exists(MODEL_PATH):
+        return jsonify({"error": "Model not found. Please train the model first."}), 400
 
-cap.release()
-cv2.destroyAllWindows()
+    # Load model
+    model = load_model(MODEL_PATH)
+
+    # Get the image file from the request
+    file = request.files.get('image')
+    if not file:
+        return jsonify({"error": "No image uploaded!"}), 400
+
+    # Convert the image to numpy array and preprocess it
+    img = cv2.imdecode(np.fromstring(file.read(), np.uint8), cv2.IMREAD_GRAYSCALE)
+    img = cv2.resize(img, (64, 64))  # Resize to match the input shape
+    img = img.reshape(1, 64, 64, 1) / 255.0  # Normalize
+
+    # Make prediction
+    prediction = model.predict(img)
+    predicted_label_index = np.argmax(prediction)
+    
+    # Load label dictionary
+    with open('label_dict.json', 'r') as f:
+        label_dict = json.load(f)
+
+    predicted_label = label_dict[str(predicted_label_index)]
+    return jsonify({"predicted_gesture": predicted_label}), 200
+
+# Run the Flask app
+if __name__ == '__main__':
+    app.run(debug=True)

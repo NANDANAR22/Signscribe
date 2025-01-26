@@ -1,35 +1,66 @@
 import streamlit as st
-from PIL import Image
-import numpy as np
-import io
 import cv2
-from backend import process_image  
+import numpy as np
+from tensorflow.keras.models import load_model
 
+# Load the trained model
+@st.cache_resource
+def load_trained_model():
+    return load_model("sign_language_model.h5")
+
+# Load the label dictionary
+@st.cache_data
+def load_label_dict():
+    # Replace with the actual label dictionary used during training
+    return {
+        0: "A", 1: "B", 2: "C", 3: "D", 4: "E",
+        5: "F", 6: "G", 7: "H", 8: "I", 9: "J",
+        10: "K", 11: "L", 12: "M", 13: "N", 14: "O",
+        15: "P", 16: "Q", 17: "R", 18: "S", 19: "T",
+        20: "U", 21: "V", 22: "W", 23: "X", 24: "Y", 25: "Z"
+    }
+
+# Preprocess the uploaded image for prediction
+def preprocess_image(image):
+    image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)  # Convert to grayscale
+    image = cv2.resize(image, (64, 64))  # Resize to match the input shape
+    image = image.reshape(1, 64, 64, 1) / 255.0  # Normalize
+    return image
+
+# Perform prediction
+def predict(image, model, label_dict):
+    prediction = model.predict(image)
+    gesture_index = np.argmax(prediction)
+    gesture = label_dict[gesture_index]
+    return gesture
+
+# Streamlit UI
 def main():
-    st.title("Signscribe - Sign Language Recognition")
+    st.title("Sign Language Recognition")
+    st.write("Upload an image of a sign language gesture to get a prediction.")
 
-    # Image upload component
-    uploaded_image = st.file_uploader("Upload an image for sign language recognition", type=["jpg", "png", "jpeg"])
+    # File uploader for image input
+    uploaded_file = st.file_uploader("Upload an Image", type=["jpg", "jpeg", "png"])
 
-    if uploaded_image is not None:
-        
-        image = Image.open(uploaded_image)
-        st.image(image, caption='Uploaded Image.', use_column_width=True)
-        st.write("Processing the image...")
+    if uploaded_file is not None:
+        # Read the uploaded image
+        file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
+        image = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
 
-       
-        image_array = np.array(image)
-        image_bgr = cv2.cvtColor(image_array, cv2.COLOR_RGB2BGR)  
+        st.image(image, channels="BGR", caption="Uploaded Image", use_column_width=True)
 
-       
-        processed_image, gesture = process_image(image_bgr)
+        # Preprocess the image
+        processed_image = preprocess_image(image)
 
-      
-        st.write(f"Detected Gesture: {gesture}")
+        # Load model and labels
+        model = load_trained_model()
+        label_dict = load_label_dict()
 
-        
-        processed_image_pil = Image.fromarray(cv2.cvtColor(processed_image, cv2.COLOR_BGR2RGB))
-        st.image(processed_image_pil, caption="Processed Image with Hand Landmarks", use_column_width=True)
+        # Predict the gesture
+        prediction = predict(processed_image, model, label_dict)
+
+        st.write("## Predicted Gesture:")
+        st.success(prediction)
 
 if _name_ == "_main_":
     main()

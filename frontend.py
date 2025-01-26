@@ -62,5 +62,6 @@ def main():
         st.write("## Predicted Gesture:")
         st.success(prediction)
 
-if _name_ == "_main_":
+# Corrected if condition to check if the script is executed directly
+if __name__ == "__main__":
     main()
